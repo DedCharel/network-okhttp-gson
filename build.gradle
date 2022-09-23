@@ -5,7 +5,6 @@ buildscript {
     ext.coroutines_version = "1.6.1"
     ext.nav_version = "2.4.0"
 
-    // todo #1: define versions for OkHttp and GSON libraries
     ext.okhttp_version = "4.9.3"
     ext.gson_version = "2.9.0"
 
