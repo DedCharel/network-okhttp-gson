@@ -1,29 +1,32 @@
 package ua.cn.stu.http.sources.base
 
+import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.suspendCancellableCoroutine
-import okhttp3.Call
-import okhttp3.Request
-import okhttp3.RequestBody
-import okhttp3.Response
+import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import ua.cn.stu.http.app.model.AppException
 import ua.cn.stu.http.app.model.BackendException
 import ua.cn.stu.http.app.model.ConnectionException
 import ua.cn.stu.http.app.model.ParseBackendResponseException
+import java.io.IOException
+import java.net.URL
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * Base class for all OkHttp sources.
  */
-// todo #5: implement base source which uses OkHttp library for making HTTP requests
-//          and GSON library for working with JSON data.
-//          Implement the following methods:
-//          - Call.suspendEnqueue() -> suspending function which should wrap OkHttp callbacks
-//          - Request.Builder.endpoint() -> for concatenating Base URL and endpoint.
-//          - T.toJsonRequestBody() -> for serializing any data class into JSON request body.
-//          - Response.parseJsonResponse() -> for deserializing server responses into data classes.
+
 open class BaseOkHttpSource(
     private val config: OkHttpConfig
 ) {
+    val gson: Gson = config.gson
+    val client: OkHttpClient = config.client
+
+    private val contentType = "application/json; charset=utf-8".toMediaType()
 
     /**
      * Suspending function which wraps OkHttp [Call.enqueue] method for making
@@ -35,22 +38,54 @@ open class BaseOkHttpSource(
      */
     suspend fun Call.suspendEnqueue(): Response {
         return suspendCancellableCoroutine { continuation ->
-            // TODO
+            continuation.invokeOnCancellation {
+                cancel()
+            }
+            enqueue(object : Callback{
+                override fun onFailure(call: Call, e: IOException) {
+                    val appException = ConnectionException(e)
+                    continuation.resumeWithException(appException)
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    if (response.isSuccessful){
+                        continuation.resume(response)
+                    }else {
+                        handleErrorResponse(response, continuation)
+                    }
+                }
+
+            })
         }
     }
 
+    private fun handleErrorResponse(response: Response,
+                continuation: CancellableContinuation<Response>){
+        val httpCode = response.code
+
+        try {
+            val map = gson.fromJson(response.body!!.string(), Map::class.java)
+            val message = map["error"].toString()
+            continuation.resumeWithException(BackendException(httpCode, message))
+        } catch (e: Exception) {
+            val appException = ParseBackendResponseException(e)
+            continuation.resumeWithException(appException)
+        }
+    }
     /**
      * Concatenate the base URL with a path and query args.
      */
     fun Request.Builder.endpoint(endpoint: String): Request.Builder {
-        TODO()
+        url("${config.baseUrl}${endpoint}")
+        return this
     }
 
     /**
      * Convert data class into [RequestBody] in JSON-format.
      */
     fun <T> T.toJsonRequestBody(): RequestBody {
-        TODO("Convert T object into RequestBody object")
+        val json = gson.toJson(this)
+        return json.toRequestBody(contentType)
     }
 
     /**
@@ -61,7 +96,11 @@ open class BaseOkHttpSource(
      * @throws ParseBackendResponseException
      */
     fun <T> Response.parseJsonResponse(typeToken: TypeToken<T>): T {
-        TODO("Convert Response object into T object by using TypeToken")
+        try {
+            return gson.fromJson(this.body!!.string(), typeToken.type)
+        } catch (e: Exception) {
+            throw ParseBackendResponseException(e)
+        }
     }
 
     /**
@@ -71,7 +110,11 @@ open class BaseOkHttpSource(
      * @throws ParseBackendResponseException
      */
     inline fun <reified T> Response.parseJsonResponse(): T {
-        TODO("Convert Response object into T object by using Class<T>")
+        try {
+            return gson.fromJson(this.body!!.string(), T::class.java)
+        } catch (e:Exception) {
+            throw ParseBackendResponseException(e)
+        }
     }
 
 }
